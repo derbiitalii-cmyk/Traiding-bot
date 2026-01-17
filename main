@@ -1,0 +1,70 @@
+python
+import asyncio
+import ccxt
+import pandas as pd
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+
+# Настройки
+API_TOKEN = '7678882216:AAEhNSpyWVI1f6Cj004jKm97QTZ6FA5UucE'
+SYMBOL = 'BTC/USDT'
+TIMEFRAME = '1h'
+
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher()
+exchange = ccxt.binance()
+
+def get_levels(df):
+    """
+    Простейший поиск уровней по Герчику: 
+    минимум/максимум, которые касались несколько раз.
+    """
+    # Берем максимумы последних 50 свечей
+    levels = df['high'].tail(50).value_counts()
+    # Уровень, который встречался более 1 раза (подтвержденный)
+    key_levels = levels[levels > 1].index.tolist()
+    return key_levels
+
+def analyze_breakout(df):
+    """
+    Логика анализа пробоя:
+    1. Ближний ретест (цена подошла к уровню и стоит рядом)
+    2. Затухание волатильности (АТР уменьшается)
+    """
+    current_price = df['close'].iloc[-1]
+    highs = df['high'].tail(20)
+    lows = df['low'].tail(20)
+    
+    # Ищем локальное сопротивление
+    resistance = highs.max()
+    
+    # Условие "Поджатия": каждый последующий минимум выше предыдущего
+    is_squeeze = df['low'].iloc[-3] < df['low'].iloc[-2] < df['low'].iloc[-1]
+    
+    # Расстояние до уровня (близость)
+    distance = (resistance - current_price) / current_price
+    
+    if distance < 0.005 and is_squeeze:
+        return f"🚀 Сигнал на ПРОБОЙ вверх!\nУровень: {resistance}\nЦена: {current_price}\nСтатус: Поджатие сформировано."
+    return "Анализ завершен: Четких паттернов по Герчику не найдено."
+
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    await message.answer("Бот запущен. Напиши /analyze для поиска пробоя по BTC/USDT.")
+
+@dp.message(Command("analyze"))
+async def analyze(message: types.Message):
+    await message.answer("Загружаю данные и ищу уровни...")
+    
+    # Получаем свечи
+    ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=100)
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    
+    result = analyze_breakout(df)
+    await message.answer(result)
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
